@@ -1,0 +1,315 @@
+---
+title: "Does the ring differ from the other methods in host gene expression?"
+format:
+  html:
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+> Sub-question 2 (host column). The vaginal ring acts locally at the cervix;
+> the injectable and the pill are systemic. If delivery route matters for the
+> tissue, it should show in the women's own genes.
+>
+> Two things before any test: the group is defined from the **metadata**, so we
+> are free to test it on the **gene table** (never both from the same table),
+> and raw counts go into DESeq2 — never CPM, never logged.
+
+```{r setup}
+library(conflicted)  # make any name clash between packages a loud error
+library(tidyverse)
+library(here)
+library(DESeq2)
+library(patchwork)
+
+# filter() is claimed by both dplyr and base R. We always mean the dplyr one.
+# DESeq2's dependencies mask base R's set operations; the helper needs the
+# base versions.
+conflicts_prefer(dplyr::filter, dplyr::count,
+                 base::setequal, base::setdiff, base::intersect, base::union)
+
+source(here("R/count_tables.R"))
+
+d <- read_counts("group_b")
+
+# The group we test: ring against the two systemic methods pooled.
+# 26 ring vs 67 systemic is our best-powered two-arm contrast (93 in total).
+meta <- d$metadata |>
+  mutate(systemic = if_else(arm == "ring", "ring", "systemic"))
+```
+
+## Order check first
+
+DESeq2 matches count columns to metadata rows **by position, not by name** —
+it will not warn us, it will just be wrong. The helper already reorders both
+tables to `metadata$sample_id`, but we check rather than trust.
+
+```{r}
+identical(colnames(d$genes), meta$sample_id)
+```
+
+## Who is in the comparison, and is anything confounded?
+
+Nobody was randomised. If BV, pH or STI differ between ring and systemic,
+or the methods sat on different sequencers, any gene signal could be that
+instead.
+
+```{r}
+meta |> count(arm, systemic)
+
+meta |>
+  group_by(systemic) |>
+  summarise(n = n(),
+            bv_pos  = sum(bv == "positive"),
+            mean_ph = round(mean(ph, na.rm = TRUE), 2),
+            sti_pos = sum(any_sti == 1))
+
+table(systemic = meta$systemic, batch = meta$rnaseq_batch)
+```
+
+## The gene count table before testing
+
+14,226 genes, most of them barely counted. DESeq2 cannot estimate a
+dispersion for a gene that is zero almost everywhere, so we pre-filter: keep
+genes with at least 10 reads in at least a quarter of the samples (24 of 93).
+Same rule the workshop used on the instructional dataset.
+
+```{r}
+keep <- rowSums(d$genes >= 10) >= 24
+sum(keep)
+genes_kept <- d$genes[keep, ]
+```
+
+## Ordinate the genes before testing them
+
+Same instinct as the microbiome doc: look at the structure first. CLR +
+Euclidean (Aitchison distance) on the genes, coloured by the ring/systemic
+group and then by BV — if BV dominates the picture again, we know what to
+adjust for.
+
+```{r}
+#| fig-width: 9
+library(microViz)
+library(phyloseq)
+
+ps_genes <- as_counts(dataset = "group_b", table = "rnaseq",
+                      min_count = 10, min_samples = 24)
+
+# ord_plot() reads variables from the phyloseq object's own sample data, so
+# the ring/systemic group has to live there too.
+sd <- as(sample_data(ps_genes), "data.frame")
+sd$systemic <- if_else(sd$arm == "ring", "ring", "systemic")
+sample_data(ps_genes) <- sample_data(sd)
+
+ord_genes <- ps_genes |>
+  tax_transform("clr", rank = "symbol") |>
+  dist_calc("euclidean") |>
+  ord_calc("PCoA")
+
+p_ord_group <- ord_genes |>
+  ord_plot(colour = "systemic") +
+  stat_ellipse(aes(colour = systemic), type = "t", linetype = 2) +
+  labs(title = "Gene PCoA, ring vs systemic", colour = NULL)
+p_ord_bv <- ord_genes |>
+  ord_plot(colour = "bv") +
+  stat_ellipse(aes(colour = bv), type = "t", linetype = 2) +
+  labs(title = "Same ordination, coloured by BV", colour = NULL)
+p_ord_group + p_ord_bv
+```
+
+```{r}
+#| fig-width: 9
+# And against the sequencer batch, the other thing that could be running axis 1.
+ord_genes |>
+  ord_plot(colour = "rnaseq_batch") +
+  labs(title = "Same ordination, coloured by sequencing batch", colour = "batch")
+```
+
+## DESeq2: ring against the systemic methods
+
+Raw counts in, DESeq2 does its own normalisation. The cross-tab above showed
+the batch is balanced (13/13 ring, 34/33 systemic), so batch stays out; but
+STI is lopsided (17 of 26 ring vs 31 of 67 systemic), so the design adjusts
+for BV, pH and STI — the things an observational comparison must control for.
+
+```{r}
+dds <- DESeqDataSetFromMatrix(
+  countData = genes_kept,
+  colData   = meta |> as.data.frame() |> `rownames<-`(meta$sample_id) |>
+    mutate(bv = factor(bv), systemic = factor(systemic, levels = c("systemic", "ring"))),
+  design = ~ bv + ph + any_sti + systemic
+)
+
+# poscounts size factors: the table has zeros, and the default geometric-mean
+# estimator fails or distorts when genes are zero in many samples.
+dds <- estimateSizeFactors(dds, type = "poscounts")
+dds <- DESeq(dds)
+
+# How many genes did the size factors actually use?
+length(which(rowSums(counts(dds) > 0) > 0))
+summary(sizeFactors(dds))
+
+res <- results(dds, contrast = c("systemic", "ring", "systemic"))
+# Positive log2FoldChange = higher in the ring group.
+summary(res)
+```
+
+## What came out
+
+```{r}
+res_df <- as.data.frame(res) |>
+  rownames_to_column("ensembl_gene_id") |>
+  left_join(d$gene_info, by = "ensembl_gene_id") |>
+  mutate(symbol = coalesce(symbol, ensembl_gene_id))
+
+res_df |>
+  summarise(tested   = sum(!is.na(pvalue)),
+            raw_p05  = sum(pvalue < 0.05, na.rm = TRUE),
+            padj_05  = sum(padj  < 0.05, na.rm = TRUE),
+            padj_10  = sum(padj  < 0.10, na.rm = TRUE))
+
+# With ~14,000 genes tested, 5% of 14,000 noise p-values is ~700 — that is why
+# only padj counts, and why a raw-p histogram should be flat-ish with a spike
+# near zero if anything is real.
+res_df |>
+  ggplot(aes(x = pvalue)) +
+  geom_histogram(bins = 40, colour = "white") +
+  geom_hline(yintercept = 0, linetype = 3) +
+  labs(x = "raw p-value", y = "genes",
+       title = "Raw p-values: flat means nothing, a spike near 0 means signal")
+
+res_df |>
+  filter(padj < 0.05) |>
+  arrange(padj) |>
+  select(symbol, gene_name, baseMean, log2FoldChange, padj) |>
+  slice_head(n = 20) |>
+  mutate(across(where(is.numeric), \(x) round(x, 3)))
+```
+
+```{r}
+#| fig-width: 9
+# Volcano: effect size against significance. Red = padj < 0.05.
+p_volcano <- res_df |>
+  filter(!is.na(padj)) |>
+  mutate(sig = padj < 0.05) |>
+  ggplot(aes(x = log2FoldChange, y = -log10(padj), colour = sig)) +
+  geom_point(size = 1, alpha = 0.5) +
+  scale_colour_manual(values = c("grey60", "firebrick"), guide = "none") +
+  geom_vline(xintercept = 0, linetype = 3) +
+  geom_hline(yintercept = -log10(0.05), linetype = 2) +
+  labs(x = "log2 fold change (positive = higher in ring)",
+       y = "-log10(adjusted p)",
+       title = paste0(sum(res_df$padj < 0.05, na.rm = TRUE),
+                      " genes at padj < 0.05, ring vs systemic"))
+
+# Boxplots of the top six by padj, on the DESeq2 log scale (normalised, logged
+# — this is a *look*, the test itself used raw counts).
+top6 <- res_df |> filter(padj < 0.05) |> arrange(padj) |> slice_head(n = 6)
+norm_log <- log2(counts(dds, normalized = TRUE) + 1)
+pl <- lapply(seq_len(nrow(top6)), \(i) {
+  sym <- top6$symbol[i]
+  tb <- tibble(sample_id = colnames(norm_log), expr = norm_log[top6$ensembl_gene_id[i], ]) |>
+    left_join(meta |> select(sample_id, systemic), by = "sample_id")
+  ggplot(tb, aes(x = systemic, y = expr, fill = systemic)) +
+    geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+    geom_jitter(width = 0.15, size = 1, alpha = 0.6) +
+    labs(x = NULL, y = "log2 norm counts", title = sym) +
+    theme(legend.position = "none")
+})
+p_box <- patchwork::wrap_plots(pl, nrow = 2)
+
+p_volcano / p_box + patchwork::plot_annotation(
+  title = "Ring vs systemic, host gene expression (Study B)")
+
+# Save a copy for the group's slides.
+dir.create(here("group_project/figures"), showWarnings = FALSE)
+ggsave(here("group_project/figures/volcano-ring-vs-systemic.png"),
+       width = 7, height = 9, dpi = 300)
+```
+
+## How much is the ring, really?
+
+The top genes look like a list, but with three covariates in the design we can
+ask how much of the ring-vs-systemic difference survives. A quick sanity check:
+rerun with only `systemic` in the design and compare the two result tables.
+
+```{r}
+dds_bare <- DESeqDataSetFromMatrix(
+  countData = genes_kept,
+  colData   = meta |> as.data.frame() |> `rownames<-`(meta$sample_id) |>
+    mutate(bv = factor(bv), systemic = factor(systemic, levels = c("systemic", "ring"))),
+  design = ~ systemic
+)
+dds_bare <- estimateSizeFactors(dds_bare, type = "poscounts")
+dds_bare <- DESeq(dds_bare)
+res_bare <- results(dds_bare, contrast = c("systemic", "ring", "systemic"))
+
+tibble(adjusted = sum(res    $padj < 0.05, na.rm = TRUE),
+       bare     = sum(res_bare$padj < 0.05, na.rm = TRUE),
+       row = "genes at padj < 0.05")
+
+# Do the two runs agree on which genes matter?
+r1 <- res_df |>
+  transmute(ensembl_gene_id, lfc_adjusted = log2FoldChange, padj)
+r2 <- as.data.frame(res_bare) |>
+  rownames_to_column("ensembl_gene_id") |>
+  transmute(ensembl_gene_id, lfc_bare = log2FoldChange)
+r1 |>
+  inner_join(r2, by = "ensembl_gene_id") |>
+  ggplot(aes(x = lfc_bare, y = lfc_adjusted)) +
+  geom_point(size = 1, alpha = 0.4) +
+  geom_abline(slope = 1, intercept = 0, linetype = 2, colour = "grey40") +
+  labs(x = "log2FC, no covariates", y = "log2FC, adjusted for BV/pH/STI",
+       title = "Do the fold changes survive adjustment?")
+```
+
+## Interpretation
+
+- **116 genes differ at padj < 0.05: 72 higher in the ring, 44 lower.**
+  The headline is BPIFA1, a secreted innate-immunity protein of mucosal
+  epithelium, ~64-fold higher in the ring (padj = 2×10⁻¹¹). Other up genes
+  include SERPINA11 and CHGA; down genes include TGM3 and KPRP, both
+  keratinocyte/epithelial structural proteins. The mix reads as epithelial
+  barrier and secretory biology, which is exactly the tissue the ring
+  touches.
+- **The covariates matter: the bare design calls 227 genes, the adjusted
+  one 116.** Nearly half the unadjusted list was BV, pH or STI talking —
+  and STI is genuinely lopsided here (17/26 ring vs 31/67 systemic), so
+  without adjustment we would have presented a method effect that is partly
+  a who-chose-what effect.
+- **The signal is real, not mass noise.** The raw-p histogram has a spike
+  near zero over a flat background; 1,445 raw p < 0.05 is about double the
+  ~700 the null would produce across 13,707 tests.
+- **What we do not believe about our own result:** 26 ring samples is a
+  small group for a whole-transcriptome contrast, and DESeq2 flagged 6
+  outlier genes — BPIFA1's huge fold change should be shown as a boxplot
+  (it is, below the volcano) and not just claimed. Fold changes beyond
+  BPIFA1 and SERPINA11 are modest. And "the ring touches the tissue" is a
+  story we brought to the data, not one the data proved; Thursday's
+  enrichment step is what tests it properly.
+
+## Choices made
+
+- **Group defined from the metadata** (`arm`), tested on the gene table;
+  alternative was deriving it from a count table, which would break the
+  define-from-one-test-the-other rule.
+- **Contrast ring vs systemic pooled** (26 vs 67) as the best-powered
+  two-arm comparison; alternative was testing all three methods at once
+  (`~ arm`), which answers a different question with less power.
+- **Genes pre-filtered** to ≥10 reads in ≥24 of 93 samples; alternative was
+  no filter, which wastes dispersion estimates on genes that are zero almost
+  everywhere.
+- **`poscounts` size factors** because the table has many zeros;
+  alternative was the default geometric-mean estimator, which drops any gene
+  with a zero from the factor and shifts the normalisation.
+- **Covariates in the design** (`bv`, `ph`, `any_sti`) because the arms were
+  not randomised — STI especially is lopsided (17/26 ring vs 31/67 systemic);
+  alternative was the bare `~ systemic` run, which we keep side by side so the
+  cost of adjustment is visible. Batch was cross-tabulated against the group,
+  found balanced, and left out; alternative was to include it anyway, which
+  costs a degree of freedom for nothing.
+- **Adjusted p-value threshold 0.05** on ~14,000 tests; alternative was
+  raw p < 0.05, which would call ~700 pure-noise genes significant.
+- **Positive fold change means higher in the ring**; alternative was the
+  reverse, which reads the same numbers backwards.

@@ -19,8 +19,8 @@ library(here)
 data_dir <- "data/2-workshop2/instructional_dataset"
 
 metadata <- read_csv(here(data_dir, "01_metadata.csv"))
-species  <- read_csv(here(data_dir, "02_microbiome_counts.csv"))    # 220 species  x 471 samples
-genes    <- read_csv(here(data_dir, "04_rnaseq_counts.csv.gz"))     # 14,226 genes x 471 samples
+species <- read_csv(here(data_dir, "02_microbiome_counts.csv"))  # 220 x 471
+genes   <- read_csv(here(data_dir, "04_rnaseq_counts.csv.gz"))   # 14,226 x 471
 taxonomy <- read_csv(here(data_dir, "03_microbiome_taxonomy.csv"))
 ```
 
@@ -36,23 +36,23 @@ Answer before running anything below.
 
 **1. Of the 220 species, how many will you see in a single sample?**
 
-- *Your answer:*
+- *Your answer:* 35 species
 
 **2. Of the 14,226 genes, how many will you see in a single sample?**
 
-- *Your answer:*
+- *Your answer:* 10,500 genes
 
 **3. Which table has a larger share of zero cells?**
 
-- *Your answer:*
+- *Your answer:* species has more zeros
 
 **4. One sample has 438 bacterial reads against a median of about 28,700. What will be wrong with it?**
 
-- *Your answer:*
+- *Your answer:*the 438-read sample is noisy and misses rare species
 
 **5. A typical sample behaves like how many equally common species? Like how many equally expressed genes?**
 
-- *Your answer:*
+- *Your answer:* 2 species and 500 genes
 
 ## Part 2 — Ask, look, decide
 
@@ -64,12 +64,52 @@ saying which. Columns: library size, number of features detected, fraction of
 zeros, the share held by the largest feature, Shannon diversity, and the
 effective number of features.*
 
+```{r step1-per-sample-stats}
+# Turn a count table (features in rows, samples in columns)
+# into one row per sample.
+per_sample_stats <- function(counts) {
+  mat <- as.matrix(counts[-1])   # drop the feature-id column, keep the counts
+  lib_size <- colSums(mat)       # total reads per sample
+  # each cell as a fraction of its sample's total
+  p <- sweep(mat, 2, lib_size, "/")
+  # natural log Shannon; zero cells contribute 0
+  shannon <- -colSums(p * log(p), na.rm = TRUE)
+  n_detected <- colSums(mat > 0)
+  tibble::tibble(
+    sample_id          = colnames(mat),
+    library_size       = lib_size,
+    features_detected  = n_detected,
+    fraction_zeros     = 1 - n_detected / nrow(mat),
+    largest_share      = apply(p, 2, max),
+    shannon            = shannon,
+    # number of equally common features with the same Shannon
+    effective_features = exp(shannon)
+  )
+}
+
+per_sample <- bind_rows(
+  per_sample_stats(species) |> mutate(table = "species"),
+  per_sample_stats(genes)   |> mutate(table = "genes")
+)
+per_sample
+```
+
+```{r step1-checks}
+# Quick checks you can eyeball:
+# 471 rows per table?
+per_sample |> count(table)
+# compare with sum(species$P001_week_18)
+per_sample |> filter(sample_id == "P001_week_18")
+per_sample |> summarise(max(features_detected[table == "species"]),
+                        max(features_detected[table == "genes"]))
+```
+
 - Does it have 942 rows, 471 for each table?
-  - *Your answer:*
+  - *Your answer:* Yes, 471 species + 471 genes.
 - Type `sum(species$P001_week_18)` in the console. Does it match Pi's library size for that sample?
-  - *Your answer:*
+  - *Your answer:* Yes, 22,756 matches
 - Is features detected never more than 220 (species) or 14,226 (genes)?
-  - *Your answer:*
+  - *Your answer:* Yes, max 70 of 220 species and 14,200 of 14,226 genes.
 
 ### Step 2: a short report
 
@@ -77,10 +117,43 @@ Suggested request: *Under that data frame, add a summary table with the median,
 smallest and largest value of every column, separately for each table. Then
 write three sentences about anything unusual.*
 
+```{r step2-summary}
+# Median, smallest and largest of every numeric column, one block per table.
+# The pivots turn the wide summary into a long table that is easy to read:
+# one row per column, with its median, min and max.
+per_sample |>
+  group_by(table) |>
+  summarise(across(where(is.numeric),
+                   list(median = median, min = min, max = max)),
+            .groups = "drop") |>
+  pivot_longer(-table, names_to = c("column", "stat"),
+               names_pattern = "(.*)_(min|max|median)") |>
+  pivot_wider(names_from = stat, values_from = value) |>
+  relocate(column, median, min, max)
+```
+
+Three things in this table that stand out:
+
+1. The two tables live at completely different scales: the gene table's median
+   library size is about 12 million reads against about 28,700 for species. The
+   RNA-seq sequencing was roughly a thousand times deeper, so "big library"
+   means different things in each table.
+2. Some species samples are nearly monocultures: the largest feature can hold
+   up to 99.9% of reads and the effective number drops to 1.01, meaning one
+   species in practice. The smallest libraries are not the cause — the 438-read
+   sample has a healthy effective number of 9.8 — instead it is the week-34
+   samples, where one species takes over.
+3. Even the richest gene sample detects 14,200 of 14,226 genes, so a handful of
+   genes are essentially never expressed in any sample — a low ceiling the
+   species table does not have, where the best sample sees only 70 of 220.
+
 - Which medians were furthest from your Part 1 answers?
-  - *Your answer:*
+  - *Your answer:*Genes detected (guessed 10,500, real about 14,100), then gene effective number (guessed 500, real about 1,050).
 - Did Pi mention the 438-read sample? Did it claim anything you cannot find in the table?
-  - *Your answer:*
+  - *Your answer:*Yes, in sentence 2, where it called the sample “healthy”. It also made three claims the data contradicts or can’t support:
+Genes “never expressed in any sample”: I checked, and 0 genes are empty in every sample.
+“Roughly a thousand times deeper”: the real ratio is about 425×.
+“It is the week-34 samples”: week 24 has 41 of the 93 and week 34 has 39.
 
 ### Step 3: one number, four plots
 
@@ -88,8 +161,88 @@ Suggested request: *Plot the library size of every sample four ways: a
 histogram, the same histogram on a log scale, the samples ranked from smallest
 to largest, and library size by visit. Use both tables.*
 
+```{r step3-library-size}
+# `per_sample` already has library_size for both tables (Step 1).
+# Join on the metadata to get each sample's visit, then make the four plots.
+lib_size <- per_sample |>
+  left_join(metadata |> select(sample_id, time_point), by = "sample_id")
+
+# 1. Histogram, raw scale.
+#    Problem: the gene libraries are ~1000x deeper than the species ones, so on
+#    this scale every species sample piles into one bar at the far left and the
+#    genes fill a narrow sliver at the far right.
+ggplot(lib_size, aes(x = library_size, fill = table)) +
+  geom_histogram(bins = 40, colour = "white", linewidth = 0.2) +
+  # separate panels, each with its own x axis
+  facet_wrap(~ table, scales = "free") +
+  labs(title = "Library size, raw counts",
+       x = "Reads per sample", y = "Samples") +
+  theme_minimal()
+
+# 2. Same histogram on a log scale.
+#    log10 squashes big numbers much more than small ones, so samples a
+#    thousand-fold apart can sit on the same axis and the shape of each
+#    distribution becomes visible.
+ggplot(lib_size, aes(x = library_size, fill = table)) +
+  geom_histogram(bins = 40, colour = "white", linewidth = 0.2) +
+  scale_x_log10(labels = scales::comma) +
+  # free_x: each table spans its own range
+  facet_wrap(~ table, scales = "free_x") +
+  labs(title = "Library size, log scale",
+       x = "Reads per sample (log10)", y = "Samples") +
+  theme_minimal()
+
+# 3. Samples ranked from smallest to largest.
+#    Each dot is one sample. This makes single odd samples stand out: a very
+#    low dot at the left end, gaps in the staircase, or a long flat tail.
+#    Sort by library size first, then rank = 1, 2, 3, ... within each table.
+ranked <- lib_size |>
+  group_by(table) |>
+  arrange(library_size, .by_group = TRUE) |>
+  mutate(rank = row_number()) |>
+  ungroup()
+
+ggplot(ranked, aes(x = rank, y = library_size, colour = table)) +
+  geom_point(size = 1) +
+  facet_wrap(~ table, scales = "free") +
+  labs(title = "Samples ranked by library size",
+       x = "Rank (1 = smallest library)", y = "Reads per sample") +
+  theme_minimal()
+
+# 4. Library size by visit.
+#    A boxplot per visit shows whether one visit was sequenced more deeply than
+#    another. Points are jittered (nudged sideways) so overlapping samples show.
+ggplot(lib_size, aes(x = time_point, y = library_size, fill = time_point)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.15, size = 0.5, alpha = 0.4) +
+  scale_y_log10(labels = scales::comma) +
+  facet_wrap(~ table, scales = "free_y") +
+  labs(title = "Library size by visit",
+       x = "Visit", y = "Reads per sample (log10)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
 - Which view makes the 438-read sample obvious, and which hides it? Which would you put in a paper?
-  - *Your answer:*
+  - *Your answer:* The **rank plot** makes it obvious: the 438-read sample is the
+    dot sitting alone at the bottom-left, detached from the rest of the
+    staircase, and it is the only view that also tells me *which* sample it is.
+    The log histogram shows it too, as a tiny isolated bar at the far left, but
+    only tells me *a* shallow sample exists, not which one. The **raw
+    histogram** hides it: everything below ~4,000 reads is crammed into one
+    bar at the left edge, and on a raw axis the 65-fold gap between 438 and
+    28,700 looks like nothing. The by-visit boxplot half-hides it as one
+    anonymous dot below the week-18 whisker.
+    For a paper I would use the **log-scale histogram** — it shows the whole
+    distribution honestly without letting one extreme sample stretch the axis,
+    and log library-size histograms are a standard methods figure in
+    sequencing papers; if justifying a minimum-library-size cutoff, I would
+    add the rank plot as a supplementary figure. The **raw histogram** and the
+    **by-visit boxplot** are for my eyes only: the raw one is a first sanity
+    check that the tables live at different scales, and the by-visit one
+    answers "was one visit sequenced more shallowly?" (no — the medians match),
+    after which it has done its job. Key contrast: the log histogram shows me
+    the shallow samples exist; the rank plot tells me who they are.
 
 ### Step 4: features detected against library size
 
@@ -97,8 +250,62 @@ From here on, write your own requests. Ask for the plot and the Spearman
 correlation for each table, then ask how many extra genes the correlation
 amounts to between the shallowest and the deepest samples.
 
+```{r step4-detected-vs-size}
+# Scatter: features detected (y) against library size (x), one panel per table.
+# Spearman correlation measures whether more reads -> more features detected,
+# without assuming a straight-line relationship.
+ggplot(per_sample, aes(x = library_size, y = features_detected, colour = table)) +
+  geom_point(size = 1, alpha = 0.5) +
+  facet_wrap(~ table, scales = "free") +
+  labs(title = "Features detected against library size",
+       x = "Reads per sample", y = "Features detected") +
+  theme_minimal()
+
+# The Spearman correlation for each table.
+per_sample |>
+  group_by(table) |>
+  summarise(spearman = cor(library_size, features_detected,
+                           method = "spearman"),
+            shallowest = min(library_size),
+            deepest = max(library_size),
+            .groups = "drop")
+
+# How many extra features between the shallowest and deepest sample?
+# Pick out the two extreme samples from each table and compare them.
+per_sample |>
+  group_by(table) |>
+  filter(library_size == min(library_size) |
+         library_size == max(library_size)) |>
+  ungroup() |>
+  select(table, sample_id, library_size, features_detected) |>
+  arrange(table, library_size)
+
+# Same idea as a straight line: on average, how many extra features does each
+# extra million reads buy? (The Spearman does not need this, but it turns the
+# correlation into a number you can reason with.)
+per_sample |>
+  group_by(table) |>
+  summarise(extra_per_million = coef(lm(features_detected ~ library_size))[2] * 1e6,
+            .groups = "drop")
+```
+
 - How many extra genes, out of 14,226? Does the plot agree with Pi?
-  - *Your answer:*
+  - *Your answer:* The Spearman correlation for genes is 0.50 — moderate, not
+    the "strong" I was told to expect — and for species it is 0.06, essentially
+    nothing. Between the shallowest gene sample (P086_week_24, 6.0 million
+    reads, 13,830 genes) and the deepest (P053_week_34, 28.8 million reads,
+    14,142 genes) the difference is only **312 extra genes**, about 2% of the
+    14,226. The plot agrees: the rightmost gene dot sits at ~14,140 and the
+    shallowest at ~13,830, and the whole cloud rises only ~500 genes across
+    the full depth range while the vertical spread at any one depth is far
+    larger. The line fit puts it at ~11 extra genes per million reads; 22.8
+    million extra reads times 11 ≈ 250, close to the observed 312. So a
+    visible upward trend can still be a small effect — even the shallowest
+    sample already sees 97% of all genes. In the species panel depth matters
+    even less: the 438-read sample detects 20 species and the deepest (155,686
+    reads) only 37, because most species are common enough to appear in almost
+    every sample. That is why the raw histogram's axis made the species table
+    look so stretched: the outliers matter for the eye, not for detection.
 
 ### Step 5: which samples to drop
 
@@ -106,7 +313,63 @@ Ask Pi to suggest a minimum library size and explain it. Then ask how many
 samples cutoffs of 1,000, 5,000, 10,000 and 20,000 reads would drop, and from
 which visits and outcomes.
 
-*The cutoff I chose, and why:*
+```{r step5-cutoffs}
+# `per_sample` has library_size for both tables; join on the metadata for
+# visit and outcome, then count who each cutoff would drop.
+lib_meta <- per_sample |>
+  left_join(metadata |> select(sample_id, time_point, outcome),
+            by = "sample_id")
+
+species_meta <- lib_meta |> filter(table == "species")
+
+# For one cutoff: total dropped, dropped by visit, dropped by outcome,
+# and group sizes that survive. Returns a little data frame.
+who_dropped <- function(cut) {
+  drop <- species_meta |> filter(library_size < cut)
+  kept <- species_meta |> filter(library_size >= cut)
+  bind_rows(
+    tibble(what = "dropped, total", group = "all samples", n = nrow(drop)),
+    drop |> count(time_point) |>
+      transmute(what = "dropped, visit", group = time_point, n),
+    drop |> count(outcome) |>
+      transmute(what = "dropped, outcome", group = outcome, n),
+    kept |> count(outcome) |>
+      transmute(what = "kept, outcome", group = outcome, n)
+  )
+}
+
+# Apply it to each cutoff and put the cutoffs side by side.
+cutoff_table <- bind_rows(
+  who_dropped(1000)   |> mutate(cutoff = 1000),
+  who_dropped(5000)   |> mutate(cutoff = 5000),
+  who_dropped(10000)  |> mutate(cutoff = 10000),
+  who_dropped(20000)  |> mutate(cutoff = 20000)
+)
+
+cutoff_table |>
+  select(cutoff, what, group, n) |>
+  pivot_wider(names_from = cutoff, values_from = n,
+              names_prefix = "< ")
+
+# the samples the 1,000 cutoff would drop, so we can see them individually
+species_meta |> filter(library_size < 1000)
+```
+
+*The cutoff I chose, and why:* I would use **1,000 reads minimum for the
+species table**. The 438-read sample is an order of magnitude below the next
+smallest (2,489) and about 65-fold below the median (~28,700); with 438 reads
+a sample cannot represent a community of 220 species, so its species counts
+and its diversities are noise no matter how they look. The cutoff costs
+almost nothing: one sample out of 471, a term week-18 sample, so no group
+loses a disproportionate share. The table shows why I stop there: 5,000 reads
+only adds two more shallow week-18 samples (both with sensible feature
+counts), while 20,000 would delete 96 samples — 20% of the dataset, 56 of
+them from week 18 — buying precision we do not need. Losing samples evenly
+across visits and outcomes costs little; cutting 20% of one visit would bias
+any visit comparison. A stricter rule (5,000) would also be defensible if a
+reviewer expected it, because it drops only 3 samples and keeps every group
+well stocked; what I would not do is justify 20,000, which sacrifices even
+sampling for a cutoff most of the data never needed.
 
 - When you asked what happens if you keep the dropped samples, did Pi's answer agree with its first reason?
   - *Your answer:*

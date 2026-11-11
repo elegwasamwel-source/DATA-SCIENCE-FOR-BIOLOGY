@@ -1,0 +1,211 @@
+---
+title: "Do the three contraceptive methods differ in community composition?"
+format:
+  html:
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+> Sub-question 1 (microbiome column). 93 women, one sample each, chose one
+> of three methods: injectable (39), pill (28), ring (26). Nobody was
+> randomised, so any difference we see is an association, not proof the
+> method caused it.
+>
+> Pipeline: `tax_transform() |> dist_calc() |> ord_calc("PCoA") |> ord_plot()`
+
+```{r setup}
+library(conflicted)  # make any name clash between packages a loud error
+library(tidyverse)
+library(here)
+library(microViz)
+library(phyloseq)
+library(vegan)
+
+# filter() is claimed by both dplyr and base R. We always mean the dplyr one.
+conflicts_prefer(dplyr::filter)
+
+source(here("R/count_tables.R"))
+
+# Species seen in at least 10 of the 93 samples; rarer ones are mostly noise.
+ps <- as_counts(dataset = "group_b", table = "microbiome",
+                min_count = 1, min_samples = 10)
+ps
+```
+
+## The ordination
+
+Bray-Curtis on relative abundance (compositional transform) — the version
+we learned on Tuesday. Each point is one person, coloured by method.
+
+```{r}
+#| fig-width: 9
+ord_bray <- ps |>
+  tax_transform("compositional") |>
+  dist_calc("bray") |>
+  ord_calc("PCoA")
+
+p_pcoa <- ord_bray |>
+  ord_plot(colour = "arm") +
+  stat_ellipse(aes(colour = arm), type = "t", linetype = 2) +
+  labs(title = "Bray-Curtis PCoA, coloured by method")
+p_pcoa
+
+# Save a copy for the group's slides.
+dir.create(here("group_project/figures"), showWarnings = FALSE)
+ggsave(here("group_project/figures/pcoa-by-arm.png"),
+       plot = p_pcoa, width = 7, height = 5, dpi = 300)
+```
+
+The same points coloured by BV status and pH, to see what *else* axis 1 or
+axis 2 might be tracking:
+
+```{r}
+#| fig-width: 9
+ord_bray |>
+  ord_plot(colour = "bv") +
+  labs(title = "Same ordination, coloured by Amsel BV status") ->
+  p_bv
+ord_bray |>
+  ord_plot(colour = "ph") +
+  scale_colour_viridis_c() +
+  labs(title = "Same ordination, coloured by pH") ->
+  p_ph
+patchwork::wrap_plots(p_bv, p_ph, nrow = 1)
+```
+
+## Is the difference real, and is it a centre or a spread?
+
+PERMANOVA asks: could a distance matrix this structured arise if the
+method labels were shuffled? We use `by = "margin"` because the arms were
+not randomised and differ in pH and BV, so the variables are entangled.
+
+```{r}
+dist_bray <- ord_bray |> dist_get()
+meta <- as(sample_data(ps), "data.frame")
+
+vegan::adonis2(dist_bray ~ arm + bv + ph + any_sti, data = meta,
+               permutations = 999, by = "margin")
+```
+
+PERMANOVA can be significant because groups sit in different **places**
+(centroids) or just have different **spreads**. This test separates the two:
+
+```{r}
+vegan::betadisper(as.dist(dist_bray), meta$arm) |> permutest()
+```
+
+## A second distance, to check the answer isn't a fluke of Bray-Curtis
+
+CLR (centred log ratio) + Euclidean is the Aitchison distance: it treats
+the data as compositional from the start rather than just converting to
+percentages.
+
+```{r}
+#| fig-width: 9
+ord_clr <- ps |>
+  tax_transform("clr") |>
+  dist_calc("euclidean") |>
+  ord_calc("PCoA")
+
+ord_clr |>
+  ord_plot(colour = "arm") +
+  stat_ellipse(aes(colour = arm), type = "t", linetype = 2) +
+  labs(title = "CLR + Euclidean PCoA (Aitchison)")
+
+vegan::adonis2(ord_clr |> dist_get() ~ arm + bv + ph + any_sti,
+               data = meta, permutations = 999, by = "margin")
+```
+
+## Which comparisons are actually powered?
+
+With 93 people in three unequal arms, a two-arm contrast is better powered
+than the three-way test. Ring (26) versus the two systemic methods pooled
+(67) is our best-powered comparison:
+
+```{r}
+meta_ring <- meta |> mutate(systemic = arm != "ring")
+vegan::adonis2(dist_bray ~ systemic + bv + ph + any_sti, data = meta_ring,
+               permutations = 999, by = "margin")
+```
+
+## What tracks the ordination axes?
+
+The genera most correlated with axis 1, so the difference has a face:
+
+```{r}
+ps |>
+  tax_agg("Genus") |>
+  tax_transform("compositional") |>
+  dist_calc("bray") |>
+  ord_calc("PCoA") |>
+  ord_plot(colour = "arm", plot_taxa = 8,
+           tax_vec_length = 1) +
+  stat_ellipse(aes(colour = arm), type = "t", linetype = 2) +
+  labs(title = "Which genera point along the axes?")
+```
+
+The arrows are the eight most abundant genera; an arrow pointing the same way
+as a cluster of points means that genus is more abundant in those samples.
+
+The number behind the picture: correlation of each genus's relative
+abundance with axis 1 (Spearman, which copes with the many zeros).
+
+```{r}
+# Axis scores: one MDS1/MDS2 pair per sample, from the ordination object
+sc <- vegan::scores(ord_bray@ord, display = "sites")[, 1:2]
+
+# Genus-level relative abundances (taxa in rows, samples in columns)
+ps_genus <- ps |> tax_agg("Genus") |> tax_transform("compositional")
+genus_rel <- t(as.matrix(ps_genus@counts))
+stopifnot(identical(colnames(genus_rel), rownames(sc)))  # same samples, same order
+
+cors <- apply(genus_rel, 1, \(g) cor(g, sc[, 1], method = "spearman"))
+tibble(taxon = names(cors), spearman_with_axis1 = round(cors, 2)) |>
+  arrange(desc(abs(spearman_with_axis1))) |>
+  slice_head(n = 8)
+```
+
+## Interpretation
+
+- **The three methods do not detectably differ in community composition.**
+  The three-way PERMANOVA gives arm p = 0.075 (R² = 2.8%) once BV, pH and
+  STI are in the model, and the best-powered contrast, ring vs systemic
+  pooled, is clearly null (p = 0.85). Alpha diversity agrees: Shannon by
+  arm was not significant either (p = 0.47).
+- **What does differ is BV status: R² = 14%, p = 0.001** — five times more
+  of the variation than the method explains. Axis 1 is essentially a BV
+  axis: Gardnerella, Dialister, Prevotella, Sneathia and Fannyhessea load
+  positive, *Lactobacillus* strongly negative. The ellipses overlap by arm
+  but separate by BV in the second ordination plot.
+- The difference is a **shift, not a spread**: betadisper p = 0.77, so the
+  three arms are equally dispersed and the (weak) arm signal is not a
+  heterogeneity artifact.
+- **BV is a plausible confounder, not just a covariate.** Nobody was
+  randomised, and BV is not distributed evenly across arms (QC report:
+  10/26 ring positive vs 29/67 systemic), so part of what looks like a
+  method effect could be who chose which method. With `by = "margin"` the
+  arm effect is what is left *after* crediting BV — and what is left is
+  very little.
+- **What we can and cannot claim:** with 93 people in arms of 26 to 39, we
+  are underpowered for small shifts. We can rule out a *large* method
+  effect on composition; a small one could hide inside p = 0.075. This
+  links straight to the connecting-the-two question: if BV explains the
+  composition, does it also explain any gene-expression differences?
+
+## Choices made
+
+- Ordinated on species seen in ≥10 of 93 samples; alternative was no
+  filter, which lets single-sample species add noise to every distance.
+- Main distance is **Bray-Curtis on relative abundance**; alternative was
+  Jaccard (presence/absence), which ignores how abundant anything is.
+- Added **CLR + Euclidean** as a second opinion; alternative was to trust
+  one distance only.
+- PERMANOVA with `by = "margin"` because arm, BV, pH and STI are
+  entangled in an observational design; alternative was `by = "terms"`,
+  which credits each variable in the order entered.
+- Tested dispersion with `betadisper` before trusting a significant
+  PERMANOVA; alternative was to report R² without checking spread.
+- Pooled the two systemic methods to compare against the ring for power;
+  alternative was all pairwise tests, which triples the number of tests.

@@ -1,0 +1,283 @@
+---
+title: "Study B — Quality control before we analyse anything"
+format:
+  html:
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+> Study B: 93 people, one sample each, three contraceptive methods
+> (39 injectable, 28 pill, 26 ring). Before we ask any biology questions,
+> we check the data is complete and sane.
+
+```{r setup}
+library(conflicted)  # make any name clash between packages a loud error
+library(tidyverse)
+library(here)
+
+# filter() is claimed by both dplyr and base R. We always mean the dplyr one.
+conflicts_prefer(dplyr::filter)
+
+source(here("R/count_tables.R"))
+
+d <- read_counts("group_b")
+```
+
+## The sample table
+
+One row per person. 93 rows expected.
+
+```{r}
+nrow(d$metadata)
+d$metadata |> count(arm)
+d$metadata |> count(bv)
+
+# Features in the two count tables (rows of each matrix),
+# and the samples in each (columns, should match the metadata rows)
+c(
+  species_features = nrow(d$species),
+  gene_features    = nrow(d$genes),
+  samples_in_both = ncol(d$species)
+)
+```
+
+## Do all tables agree on the samples?
+
+Every table is joined by `sample_id`, so a typo there would silently drop a
+sample from part of the analysis. We check all four tables contain the same
+IDs, in the same order (DESeq2 and friends match columns to rows by position,
+not by name — Tuesday's lesson).
+
+```{r}
+ids <- list(
+  metadata = d$metadata$sample_id,
+  species  = colnames(d$species),
+  genes    = colnames(d$genes),
+  cytokines = d$cytokines$sample_id
+)
+
+# Same set of IDs everywhere?
+sapply(ids, \(x) setequal(x, ids$metadata))
+
+# Same order too? (this is what the tests above need to be safe)
+sapply(ids[-1], \(x) identical(x, ids$metadata))
+```
+
+Missing values anywhere in the metadata?
+
+```{r}
+d$metadata |> summarise(across(everything(), \(x) sum(is.na(x)))) |>
+  pivot_longer(everything(), names_to = "column", values_to = "missing")
+```
+
+## Library sizes
+
+How many reads did each sample get, in each count table? A sample with
+almost no reads is unreliable; a few very large ones can dominate
+Bray-Curtis distances (which is why we ordinate on relative abundance).
+
+```{r}
+mic <- d$species   # shorter name for the microbiome count table
+
+libs <- colSums(mic)          # total reads per sample
+summary(libs)
+
+# Flag any sample below 10,000 reads.
+small <- names(libs)[libs < 10000]
+small
+
+# Same check on the gene table (its libraries are ~400x bigger, so the
+# threshold scales up: flag anything under 1 million reads).
+gene_libs <- colSums(d$genes)
+summary(gene_libs)
+names(gene_libs)[gene_libs < 1e6]   # should be empty
+```
+
+```{r}
+lib <- tibble(
+  sample_id  = colnames(d$species),
+  species_reads = colSums(d$species),
+  gene_reads    = colSums(d$genes)
+)
+
+lib |>
+  pivot_longer(-sample_id, names_to = "table", values_to = "reads") |>
+  ggplot(aes(x = reads, y = reorder(sample_id, reads), fill = table)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~table, scales = "free_x") +
+  labs(x = "reads per sample", y = NULL, title = "Library sizes, Study B") +
+  theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
+```
+
+The smallest and largest, so we know the range at a glance:
+
+```{r}
+lib |> summarise(across(where(is.numeric), list(min = min, median = median, max = max)))
+```
+
+## Feature prevalence
+
+How many samples does each species appear in? Species seen in only one or
+two samples are mostly noise for a 93-person comparison.
+
+```{r}
+prev <- rowSums(d$species > 0)
+tibble(prevalence = prev) |>
+  ggplot(aes(x = prevalence)) +
+  geom_histogram(bins = 40) +
+  labs(x = "number of samples a species appears in", y = "species",
+       title = paste(ncol(d$species), "samples,", nrow(d$species), "species"))
+sum(prev >= 10)   # species in at least 10 samples
+```
+
+## Do the arms already differ in the metadata?
+
+The study was **not randomised** — people chose their method. So the arms
+may differ in pH, BV status or STIs before any biology acts. (Study B
+records no age column.) We look now so we know what to adjust for later.
+
+```{r}
+d$metadata |>
+  group_by(arm) |>
+  summarise(n = n(),
+            mean_ph  = round(mean(ph, na.rm = TRUE), 2),
+            mean_nugent = round(mean(nugent, na.rm = TRUE), 1),
+            bv_pos   = sum(bv == "positive"),
+            sti_pos  = sum(any_sti == 1, na.rm = TRUE))  # any_sti is coded 1 = yes, 0 = no
+```
+
+`any_sti` values, so we know what codes mean "yes":
+
+```{r}
+d$metadata |> count(any_sti)
+```
+
+## Alpha diversity across the arms (exploratory)
+
+Diversity *within* a sample (alpha diversity): the Shannon index is high
+when reads are spread across many species, low when one or two species
+dominate (e.g. a healthy *Lactobacillus*-dominated vagina scores near 0).
+
+```{r}
+# Shannon index, computed by hand: -sum(p * log(p)) over the species present
+shannon <- apply(d$species, 2, \(x) {
+  p <- x / sum(x)
+  p <- p[p > 0]      # drop the zeros, log(0) is undefined
+  -sum(p * log(p))
+})
+
+shan <- tibble(sample_id = names(shannon), shannon = shannon) |>
+  left_join(d$metadata |> select(sample_id, arm), by = "sample_id")
+
+p_shannon <- shan |>
+  ggplot(aes(x = arm, y = shannon, fill = arm)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.15, size = 1.5, alpha = 0.7) +
+  labs(y = "Shannon index", x = NULL,
+       title = "Within-sample diversity by contraceptive method") +
+  theme(legend.position = "none")
+
+p_shannon  # print it so it shows in the report
+
+# Save a copy for the group's slides.
+dir.create(here("group_project/figures"), showWarnings = FALSE)
+ggsave(here("group_project/figures/shannon-by-arm.png"),
+       plot = p_shannon, width = 6, height = 4, dpi = 300)
+```
+
+```{r}
+shan |>
+  group_by(arm) |>
+  summarise(n = n(), median = round(median(shannon), 2), mean = round(mean(shannon), 2))
+
+# Kruskal-Wallis: do the three arms differ? (rank-based test, no normality
+# assumption; the workshop's DESeq2 runs come later for per-species tests)
+kruskal.test(shannon ~ arm, data = shan)
+```
+
+By eye the injectable arm has the highest median and the pill arm the lowest,
+but the spread within each arm is far bigger than the gap between them, and
+the Kruskal-Wallis test agrees: **no significant difference** (p = 0.47).
+The pill arm looks bimodal — some samples are near 0 (*Lactobacillus*-only)
+and others spread out, which is why its median (0.9) sits well below its mean.
+
+## Batch
+
+Which sequencing run did each sample go through? If one method sits mostly
+in one batch, batch effects could masquerade as method effects.
+
+```{r}
+tab <- table(arm = d$metadata$arm, batch = d$metadata$rnaseq_batch)
+tab
+
+# Same table as row percentages: each arm should sit ~50/50.
+round(100 * prop.table(tab, margin = 1))
+```
+
+For comparison, the same check in **Study A** (the probiotic trial, 176
+people sampled pre and post): is the time point balanced across batches?
+If all "pre" samples went through one sequencer, a batch effect would look
+exactly like a "before versus after" effect.
+
+```{r}
+meta_a <- read_counts("group_a")$metadata
+table(time_point = meta_a$time_point, batch = meta_a$rnaseq_batch)
+```
+
+And **Study A at baseline**: do the probiotic and placebo arms already differ
+before the intervention (the "pre" visit)? Same caveat as ours — no
+randomisation means no guarantee of balance.
+
+```{r}
+meta_a |>
+  filter(time_point == "pre") |>
+  group_by(arm) |>
+  summarise(n = n(),
+            mean_age    = round(mean(age), 1),
+            mean_ph     = round(mean(ph, na.rm = TRUE), 2),
+            mean_nugent = round(mean(nugent, na.rm = TRUE), 1),
+            amine_pos   = sum(amine_test == "Positive", na.rm = TRUE))
+
+# Study A has a handful of missing clinical values (note the NA counts):
+meta_a |>
+  summarise(across(everything(), \(x) sum(is.na(x)))) |>
+  pivot_longer(everything(), names_to = "column", values_to = "missing") |>
+  filter(missing > 0)
+```
+
+## Open questions & next steps
+
+- **DESeq2 size factors:** the smallest nonzero count in the table is 2, so
+  the workshop advice to use `poscounts` size factors applies.
+- **Feature filtering before the per-species tests:** we lean yes — keep
+  species present in at least 10 of 93 samples (62 of 220 qualify, see the
+  prevalence histogram above); 30 species appear in exactly one sample and
+  cannot support any three-arm comparison. The composition document already
+  uses this filter.
+- **Alpha diversity follow-up:** the Shannon difference between arms is not
+  significant (p = 0.47), so we do not plan to test it further unless the
+  BV-adjusted analysis changes the picture.
+
+## Choices made
+
+- We checked library size and prevalence on the **raw** counts, before any
+  transform; alternative was to QC after normalising, which hides low-read
+  samples.
+- We counted a species as "established" if it appears in at least 10 of 93
+  samples (~11%); alternative was a minimum read-count rule, which favours
+  abundant species over consistently present ones.
+- We summarised arms with means; alternative was medians, which resist
+  outliers but are harder to compare in a small table.
+- We cross-tabulated batch against arm (and Study A's time point) instead of
+  assuming balance; alternative was to skip the check and hope the lab
+  randomised well.
+- **Samples:** kept all 93; minimum library 5,247 reads (sample B006 flagged,
+  kept pending the ordination check). Alternative was dropping B006 now.
+- **Features:** QC run on all 220 taxa so nothing hides from the checks;
+  analysis docs filter to the 62 species in >=10 samples. Alternative was
+  filtering before even the QC.
+- **Alpha diversity:** Shannon by hand on relative abundance, tested with
+  Kruskal-Wallis; alternative was ANOVA on rarefied tables, which throws
+  away reads and assumes normality.
