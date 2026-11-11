@@ -26,6 +26,11 @@ library(vegan)
 # filter() is claimed by both dplyr and base R. We always mean the dplyr one.
 conflicts_prefer(dplyr::filter)
 
+# Permutation tests (PERMANOVA, betadisper) shuffle samples randomly. Without
+# a fixed seed their p-values wobble by a few thousandths on every render,
+# and the numbers we quote in the text would not be reproducible.
+set.seed(1)
+
 source(here("R/count_tables.R"))
 
 # Species seen in at least 10 of the 93 samples; rarer ones are mostly noise.
@@ -170,16 +175,16 @@ tibble(taxon = names(cors), spearman_with_axis1 = round(cors, 2)) |>
 ## Interpretation
 
 - **The three methods do not detectably differ in community composition.**
-  The three-way PERMANOVA gives arm p = 0.075 (R² = 2.8%) once BV, pH and
+  The three-way PERMANOVA gives arm p = 0.069 (R² = 2.8%) once BV, pH and
   STI are in the model, and the best-powered contrast, ring vs systemic
-  pooled, is clearly null (p = 0.85). Alpha diversity agrees: Shannon by
+  pooled, is clearly null (p = 0.854). Alpha diversity agrees: Shannon by
   arm was not significant either (p = 0.47).
 - **What does differ is BV status: R² = 14%, p = 0.001** — five times more
   of the variation than the method explains. Axis 1 is essentially a BV
   axis: Gardnerella, Dialister, Prevotella, Sneathia and Fannyhessea load
   positive, *Lactobacillus* strongly negative. The ellipses overlap by arm
   but separate by BV in the second ordination plot.
-- The difference is a **shift, not a spread**: betadisper p = 0.77, so the
+- The difference is a **shift, not a spread**: betadisper p = 0.747, so the
   three arms are equally dispersed and the (weak) arm signal is not a
   heterogeneity artifact.
 - **BV is a plausible confounder, not just a covariate.** Nobody was
@@ -190,7 +195,7 @@ tibble(taxon = names(cors), spearman_with_axis1 = round(cors, 2)) |>
   very little.
 - **What we can and cannot claim:** with 93 people in arms of 26 to 39, we
   are underpowered for small shifts. We can rule out a *large* method
-  effect on composition; a small one could hide inside p = 0.075. This
+  effect on composition; a small one could hide inside p = 0.069. This
   links straight to the connecting-the-two question: if BV explains the
   composition, does it also explain any gene-expression differences?
 
@@ -209,3 +214,7 @@ tibble(taxon = names(cors), spearman_with_axis1 = round(cors, 2)) |>
   PERMANOVA; alternative was to report R² without checking spread.
 - Pooled the two systemic methods to compare against the ring for power;
   alternative was all pairwise tests, which triples the number of tests.
+- **Fixed the random seed** (`set.seed(1)`) before the permutation tests so
+  the quoted p-values reproduce exactly on every render; alternative was
+  leaving the seed unset, where each render reports slightly different
+  p-values for the same test.

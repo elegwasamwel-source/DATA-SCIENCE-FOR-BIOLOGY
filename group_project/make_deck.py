@@ -60,7 +60,7 @@ add_slide("The study, in one slide",
      ("They chose their own contraceptive method — nobody was randomised", 0),
      ("Three arms: 39 injectable · 28 pill · 26 vaginal ring", 0),
      ("Recorded for each woman: BV status (Amsel), Nugent score, pH, STI, sequencing batch", 0),
-     ("Two count tables: 220 bacterial species and 13,713 host genes", 1),
+     ("Two count tables: 220 bacterial species and 14,226 host genes (13,713 survive the QC filter)", 1),
      ("Because it is observational, every difference is an association, not proof of cause", 0)],
     note="Read this out before any result — the audience needs the design.")
 
@@ -110,7 +110,7 @@ add_slide("Choice we made: the distance",
 # 7 — Figure 2: volcano
 caption_slide("volcano-ring-vs-systemic.png",
     "DESeq2 on raw counts, ring (26) vs systemic methods pooled (67), adjusted for "
-    "BV, pH and STI. 116 of 13,713 genes at adjusted p < 0.05 (72 higher in ring, "
+    "BV, pH and STI. 116 of the 13,707 genes tested (of 14,226 in the table) at adjusted p < 0.05 (72 higher in ring, "
     "44 lower). BPIFA1, a mucosal innate-immunity protein, is ~64-fold higher in "
     "the ring. Boxplots below the volcano show the top genes raw, not just claimed.")
 add_slide("Choice we made: adjust or not",
@@ -126,7 +126,7 @@ add_slide("Choice we made: adjust or not",
 # 8 — Answer
 add_slide("The answer, stated as plainly as the data allow",
     [("The three methods do not detectably differ in vaginal community composition "
-      "(arm p = 0.075, ring vs systemic p = 0.85; Shannon p = 0.47)", 0),
+      "(arm p = 0.069, ring vs systemic p = 0.854; Shannon p = 0.47)", 0),
      ("Bacterial vaginosis dominates the community picture: R² = 14%, p = 0.001 — "
       "five times the method's share", 0),
      ("The ring does differ from the systemic methods in host gene expression: "
@@ -140,7 +140,7 @@ add_slide("What we do NOT believe about our own result",
     [("No randomisation: women chose their methods, so BV, STI and pH differences "
       "across arms may predate any contraceptive effect", 0),
      ("Power: arms of 26–39. We can rule out a LARGE method effect on composition; "
-      "a small one could hide inside p = 0.075. Sample counts are on every comparison slide.", 0),
+      "a small one could hide inside p = 0.069. Sample counts are on every comparison slide.", 0),
      ("BPIFA1's 64-fold change rests on 26 ring samples, and DESeq2 flagged 6 "
       "outlier genes overall — we show the boxplot, but it is one gene", 0),
      ("'The ring touches the tissue' is a story we brought to the data, not one "

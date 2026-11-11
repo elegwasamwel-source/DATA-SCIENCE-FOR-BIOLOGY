@@ -137,7 +137,12 @@ for BV, pH and STI — the things an observational comparison must control for.
 dds <- DESeqDataSetFromMatrix(
   countData = genes_kept,
   colData   = meta |> as.data.frame() |> `rownames<-`(meta$sample_id) |>
-    mutate(bv = factor(bv), systemic = factor(systemic, levels = c("systemic", "ring"))),
+    mutate(bv = factor(bv),
+           # any_sti is coded 0/1; as a bare integer DESeq2 treats it as a
+           # continuous variable and warns about it. For two values the model
+           # is identical either way, but we say what we mean: a factor.
+           any_sti = factor(any_sti),
+           systemic = factor(systemic, levels = c("systemic", "ring"))),
   design = ~ bv + ph + any_sti + systemic
 )
 
@@ -238,7 +243,9 @@ rerun with only `systemic` in the design and compare the two result tables.
 dds_bare <- DESeqDataSetFromMatrix(
   countData = genes_kept,
   colData   = meta |> as.data.frame() |> `rownames<-`(meta$sample_id) |>
-    mutate(bv = factor(bv), systemic = factor(systemic, levels = c("systemic", "ring"))),
+    mutate(bv = factor(bv),
+           any_sti = factor(any_sti),
+           systemic = factor(systemic, levels = c("systemic", "ring"))),
   design = ~ systemic
 )
 dds_bare <- estimateSizeFactors(dds_bare, type = "poscounts")
