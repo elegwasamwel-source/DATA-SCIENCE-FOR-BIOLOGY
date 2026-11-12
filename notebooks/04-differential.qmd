@@ -38,10 +38,10 @@ metadata <- d$metadata |> left_join(sample_groups, by = "sample_id")
 ```
 
 ```{r}
-count(metadata, time_point, community)
+dplyr::count(metadata, time_point, community)
 ```
 
-# Exercise 1: Test the gene table with a grouping from the species table
+## Exercise 1: Test the gene table with a grouping from the species table
 
 ## Part 1 — Predict (no code)
 
@@ -121,7 +121,7 @@ Ask Pi to rerun on counts per million, then whether you should have used all
 Top ten genes labelled, your own colours, direction in words under the x axis,
 dashed cutoff lines, saved as a PNG.
 
-# Exercise 2: The same test, on the species table
+## Exercise 2: The same test, on the species table
 
 Type `/new` in Pi before you start. Steps 3 and 5 each save a file that
 tomorrow's notebook reads.

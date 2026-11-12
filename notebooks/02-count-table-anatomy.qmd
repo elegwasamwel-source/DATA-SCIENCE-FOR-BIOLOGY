@@ -28,7 +28,7 @@ taxonomy <- read_csv(here(data_dir, "03_microbiome_taxonomy.csv"))
 metadata
 ```
 
-# Exercise 1: Many looks at the same two tables
+## Exercise 1: Many looks at the same two tables
 
 ## Part 1 — Predict (no code)
 
@@ -392,7 +392,7 @@ the Shannon formula used `log2()`.
 - Did the effective number change? Did Pi say it would?
   - *Your answer:*
 
-# Exercise 2: Filters are choices
+## Exercise 2: Filters are choices
 
 Type `/new` in Pi before you start. Step 5 builds a file that this afternoon's
 notebook reads. If you are short on time, do step 5 first.

@@ -47,7 +47,7 @@ nrow(genes_by_community)
 nrow(species_by_outcome)
 ```
 
-# Exercise 1: From a gene list to a sentence
+## Exercise 1: From a gene list to a sentence
 
 ## Part 1 — Predict (no code)
 
@@ -127,7 +127,7 @@ them at week 18 by outcome.
 The `NES` bar chart for a talk: readable set names, colours labelled by
 direction, set size shown, projector-sized text.
 
-# Exercise 2: The same function, on 53 species
+## Exercise 2: The same function, on 53 species
 
 Type `/new` in Pi before you start.
 

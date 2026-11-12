@@ -58,7 +58,7 @@ ps_species <- add_groups(ps_species)
 ps_genes   <- add_groups(ps_genes)
 ```
 
-# Exercise 1: The species table
+## Exercise 1: The species table
 
 ## Part 1 — Predict (no code)
 
@@ -147,7 +147,7 @@ participants. Keep the best and make it ready for a talk.
 - Which variation showed you the most?
   - *Your answer:*
 
-# Exercise 2: The identical pipeline on 14,000 genes
+## Exercise 2: The identical pipeline on 14,000 genes
 
 Type `/new` in Pi before you start.
 

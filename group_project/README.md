@@ -22,7 +22,7 @@ Your spending is on your [OpenRouter activity page](https://openrouter.ai/activi
 
 Copy this into Pi, with your study's letter:
 
-```
+```text
 Make group_project/01-qc.qmd that checks the quality of the Study A data
 before we analyse it. Render it.
 ```
@@ -32,24 +32,24 @@ before we analyse it. Render it.
 Ask for one `.qmd` per idea, numbered in the order you make them, such as
 `02-community-shift.qmd`. Some ways to ask:
 
-```
+```text
 Make group_project/02-community-shift.qmd that asks whether the vaginal
 community changed from pre to post in Study A, and whether the change differs
 by arm. Render it.
 ```
 
-```
+```text
 You used Bray-Curtis distance. What else could you have used, and would it
 change the answer? Add the other one to the document so I can compare them.
 ```
 
-```
+```text
 I don't understand what PERMANOVA is testing here. Explain it in a few
 sentences, and give me a link to a paper or documentation page I can read
 myself.
 ```
 
-```
+```text
 Save the figure from the second chunk as a PNG in group_project/figures/.
 ```
 

@@ -1,0 +1,17 @@
+// Style-only markdown lint rules, turned off for this workshop workspace.
+//
+// MD013 (line-length): the 80-character limit is a style preference. Prose
+//   lines that run longer still read and render exactly the same.
+// MD024 (duplicate headings): the starter notebooks deliberately reuse the
+//   same section names ("Part 1 — Predict (no code)" and so on) inside
+//   different exercises.
+// MD025 (single-title): Quarto documents get one H1 from their YAML title;
+//   markdownlint compares that against headings inside the body, which isn't
+//   how Quarto structure works.
+//
+// Nothing here affects code, analysis results, or `quarto render` output.
+{
+	"MD013": false,
+	"MD024": false,
+	"MD025": false
+}
