@@ -53,15 +53,20 @@ nrow(species_by_outcome)
 
 **1. Testing 50 gene sets, how many come out at padj < 0.05 if none are truly enriched?**
 
-- *Your answer:*
+- *Your answer:* With adjusted p-values, I would expect few or none. The 0.05
+  cutoff controls the false-discovery rate, not a guarantee of exactly 2 or 3
+  false hits just because there are 50 sets.
 
 **2. Your outcome gene list was 838 up and 860 down, almost balanced. Does that make you more or less willing to believe an enrichment?**
 
-- *Your answer:*
+- *Your answer:* A little more willing to look for specific programs in either
+  direction, because the result is not just a long list of genes all changing
+  the same way. But the balance alone does not make any enrichment trustworthy.
 
 **3. Name one biological program you expect elevated in the people who delivered preterm.**
 
-- *Your answer:*
+- *Your answer:* I predict that inflammatory and innate immune programs,
+  including cytokine signaling, will be elevated in the preterm group.
 
 ## Part 2 — Ask, look, decide
 
@@ -73,9 +78,44 @@ values dropped. Get the human Hallmark sets with msigdbr, using Ensembl IDs.
 Run `fgsea(sets, stat, minSize = 15, maxSize = 500)` and sort by `padj`.*
 
 - Genes in the ranking, and how many of them appear in at least one set?
-  - *Your answer:*
+  - *Your answer:* 13,738 genes are in the ranking. 3,854 of them are in at least one Hallmark set (Hallmark covers 4,391 genes in total, so the other ~9,900 genes simply are not in any set). 3,854 is far from zero, so the Ensembl IDs matched.
 - Sets significant, and how many point each way (26, with 23 higher in preterm)?
-  - *Your answer:*
+  - *Your answer:* 26 of the 50 sets have padj < 0.05: 23 are higher in preterm and 3 are higher in term (Heme metabolism, E2F targets, G2M checkpoint). That matches the expected 26 and 23. fgsea has a little built-in randomness, so I fixed `set.seed(1)`. Without a seed I got 24 to 26. Only the borderline sets (Adipogenesis, Hedgehog) move.
+
+```{r}
+# 1. The ranking: one stat per gene, named by its Ensembl ID. fgsea wants this
+#    sorted, strongest signal first. A named number vector is all it needs.
+rank_stat <- genes_by_outcome$stat
+names(rank_stat) <- genes_by_outcome$feature
+rank_stat <- sort(rank_stat[!is.na(rank_stat)], decreasing = TRUE)
+
+# 2. Hallmark sets, keyed by Ensembl ID so they match the ranking's names.
+hallmark <- msigdbr(species = "Homo sapiens", collection = "H")
+hallmark_sets <- split(hallmark$ensembl_gene, hallmark$gs_name)
+
+# 3. Run it. minSize/maxSize keep out sets too small to test or too big to mean
+#    one program. Positive NES = the set's genes sit near the TOP of the ranking.
+#    fgsea's algorithm has some run-to-run randomness, which only shows up in the
+#    borderline sets — so we fix the seed to make re-renders identical.
+set.seed(1)
+fgsea_hallmark <- fgsea(hallmark_sets, rank_stat, minSize = 15, maxSize = 500) |>
+  as_tibble() |>
+  arrange(padj)
+```
+
+```{r}
+# The audit question first: if this second number is near zero, the Ensembl IDs
+# never matched and everything below is decoration.
+cat("Genes in the ranking:", length(rank_stat), "\n")
+cat("Genes used in Hallmark sets:", length(unique(hallmark$ensembl_gene)), "\n")
+cat("Ranking genes found in at least one set:",
+    sum(names(rank_stat) %in% unique(hallmark$ensembl_gene)), "\n")
+
+# Sets at padj < 0.05, counted by direction.
+fgsea_hallmark |>
+  filter(padj < 0.05) |>
+  count("higher in preterm" = NES > 0)
+```
 
 ### Step 2: one result, several plots
 
@@ -83,7 +123,55 @@ Bar chart of the top twelve `NES`, running-score plot for the top set, dot plot
 of all 50 sets.
 
 - Which would you put in a paper? Which tells you most about how the method works?
-  - *Your answer:*
+  - *Your answer:* For a paper I would use the bar chart (the Step 7 version): direction, size and rank are clear at a glance. The dot plot is better as a supplementary figure because it shows all 50 sets, including the 24 that did not pass. The running-score plot tells me most about how the method works: the green line climbs each time the walk down the ranked list meets a gene from the set, and here the set's genes bunch up near the top, so it climbs fast. The highest point of the line is the enrichment score.
+
+```{r}
+# Readable set names: lower-case, fix common acronyms, capitalise the first letter.
+nice_name <- function(x) {
+  x <- x |> str_remove("^HALLMARK_") |> str_replace_all("_", " ") |> str_to_lower() |>
+    str_replace_all(c("\\btnfa\\b" = "TNF-α", "\\bnfkb\\b" = "NF-κB", "\\bil6\\b" = "IL-6",
+                      "\\bil2\\b" = "IL-2", "\\bjak\\b" = "JAK", "\\bstat3\\b" = "STAT3",
+                      "\\bstat5\\b" = "STAT5", "\\be2f\\b" = "E2F", "\\bmtorc1\\b" = "mTORC1",
+                      "\\bkras\\b" = "KRAS", "\\buv\\b" = "UV", "\\bg2m\\b" = "G2M",
+                      "\\bpi3k\\b" = "PI3K", "\\bakt\\b" = "AKT", "\\bmtor\\b" = "mTOR",
+                      "\\btgf\\b" = "TGF", "\\bmyc\\b" = "MYC", "\\bdna\\b" = "DNA",
+                      "\\bp53\\b" = "p53"))
+  # Capitalise the first letter, except for names that start with "mTOR"
+  if_else(str_starts(x, "mTOR"), x, str_c(str_to_upper(str_sub(x, 1, 1)), str_sub(x, 2)))
+}
+```
+
+```{r}
+#| fig-height: 4.5
+# Plot 1: bar chart of the twelve most significant sets.
+top12 <- fgsea_hallmark |> slice_head(n = 12)
+ggplot(top12, aes(NES, fct_reorder(nice_name(pathway), NES), fill = NES > 0)) +
+  geom_col() +
+  labs(x = "NES (positive = higher in preterm)", y = NULL) +
+  theme_minimal() + theme(legend.position = "none")
+```
+
+```{r}
+#| fig-height: 3.5
+# Plot 2: running-score plot for the top set. Each tick is a gene in the set,
+# placed along the ranked list; the green line climbs when it meets a set gene.
+top_set <- fgsea_hallmark$pathway[1]
+plotEnrichment(hallmark_sets[[top_set]], rank_stat) + labs(title = nice_name(top_set))
+```
+
+```{r}
+#| fig-height: 9
+# Plot 3: dot plot of every set tested.
+ggplot(fgsea_hallmark, aes(NES, fct_reorder(nice_name(pathway), NES),
+                           size = size, colour = padj < 0.05)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_point() +
+  scale_colour_manual(values = c(`TRUE` = "firebrick", `FALSE` = "grey60"),
+                      labels = c(`TRUE` = "padj < 0.05", `FALSE` = "padj ≥ 0.05")) +
+  labs(x = "NES (positive = higher in preterm)", y = NULL, colour = NULL, size = "Genes in set") +
+  theme_minimal(base_size = 9)
+nrow(fgsea_hallmark)   # number of sets tested
+```
 
 ### Step 3: a report, audited
 
@@ -91,7 +179,25 @@ From here on, write your own requests. Ask Pi to interpret the top five sets,
 then for a table of genes shared between each pair.
 
 - Which of Pi's findings were the same genes counted twice?
-  - *Your answer:*
+  - *Your answer:* Partly, yes. Four of the top five sets are mostly one inflammation signal counted several times. TNF-α/NF-κB and Inflammatory response share 49 tested genes, about a quarter of each set (32 are in both leading edges). Interferon gamma shares 36 genes with Inflammatory response and 25 with TNF-α. Complement shares 20 and 15. Heme metabolism shares at most 5 genes with any of them (0 in the leading edges), so it is a separate finding, and it points the other way.
+
+```{r}
+# The top five sets, and how many genes each pair shares. "In the ranking" means
+# we only count genes that were actually tested; "leading edge" means the genes
+# that pushed that set up the ranking.
+top5 <- fgsea_hallmark |> slice_head(n = 5)
+top5 |> transmute(set = nice_name(pathway), size, NES = round(NES, 2), padj = signif(padj, 2))
+
+pairs <- combn(top5$pathway, 2, simplify = FALSE)
+edge <- setNames(top5$leadingEdge, top5$pathway)
+tibble(
+  set_1 = nice_name(map_chr(pairs, 1)),
+  set_2 = nice_name(map_chr(pairs, 2)),
+  shared_in_ranking = map_int(pairs, ~ length(intersect(intersect(hallmark_sets[[.x[1]]], names(rank_stat)),
+                                                         hallmark_sets[[.x[2]]]))),
+  shared_leading_edge = map_int(pairs, ~ length(intersect(edge[[.x[1]]], edge[[.x[2]]])))
+)
+```
 
 ### Step 4: could the ranking have done this on its own?
 
@@ -100,11 +206,44 @@ genes up and down, sets significant and pointing one way, and the share of
 positive statistics among all genes, significant genes, and the 500 strongest.
 
 - Did Pi check, or just reassure you?
-  - *Your answer:*
+  - *Your answer:* Pi checked: it ran the same enrichment on the community ranking and counted genes and sets for both, so the numbers are in the table above and you can re-run them.
 - About 50% (outcome) and about 4% (community) positive among the 500 strongest?
-  - *Your answer:*
+  - *Your answer:* Yes: 49.6% for outcome and 4.4% for community. Across all genes it is 46.1% and 55.0%, and among significant genes 49.4% and 30.5%. For community, positive means higher in anaerobe-dominant samples.
+
+```{r}
+# Same recipe for both rankings. For `community` the contrast is anaerobe vs
+# lactobacillus, so POSITIVE means higher in anaerobe-dominant samples.
+rank_from <- function(tbl) {
+  s <- setNames(tbl$stat, tbl$feature)
+  sort(s[!is.na(s)], decreasing = TRUE)
+}
+run_hallmark <- function(s) {
+  set.seed(1)
+  fgsea(hallmark_sets, s, minSize = 15, maxSize = 500) |> as_tibble() |> arrange(padj)
+}
+summarise_ranking <- function(tbl, res, name) {
+  s <- rank_from(tbl)
+  sig <- tbl |> filter(!is.na(padj), padj < 0.05)
+  top500 <- names(s)[order(abs(s), decreasing = TRUE)][1:500]
+  tibble(ranking = name,
+         genes_up = sum(sig$log2FoldChange > 0), genes_down = sum(sig$log2FoldChange < 0),
+         sets_sig = sum(res$padj < 0.05),
+         sets_up = sum(res$padj < 0.05 & res$NES > 0),
+         sets_down = sum(res$padj < 0.05 & res$NES < 0),
+         pct_positive_all = round(100 * mean(s > 0), 1),
+         pct_positive_sig = round(100 * mean(sig$stat > 0), 1),
+         pct_positive_top500 = round(100 * mean(s[top500] > 0), 1))
+}
+fgsea_community <- run_hallmark(rank_from(genes_by_community))
+bind_rows(summarise_ranking(genes_by_outcome,   fgsea_hallmark,   "outcome"),
+          summarise_ranking(genes_by_community, fgsea_community, "community")) |>
+  as.data.frame()   # as.data.frame so every column prints
+fgsea_community |> select(pathway, NES, padj) |> slice_head(n = 6)
+```
 
 *Which of the two enrichment results I trust, and why:*
+
+I trust the outcome result more. Its ranking is balanced (49.6% positive among the 500 strongest genes), so a set only scores high if its own genes are pushed to the top or bottom, not because the whole ranking is tilted. The community ranking is lopsided: 95.6% of its 500 strongest genes point the same way (higher in lactobacillus-dominant samples), so many sets can score just by riding on that big shift. Note that the share of significant sets pointing one way is almost the same for both (23 of 26 and 16 of 18), so that number does not separate them. The balance of the ranking does. Two cautions: fgsea shuffles genes as if they were independent, but genes are correlated, and the outcome effect rests on 43 preterm vs 114 term samples.
 
 ### Step 5: alternatives side by side
 
@@ -112,7 +251,49 @@ The hypergeometric version on significant genes only, up and down separately,
 and fgsea on Reactome (`C2`, `CP:REACTOME`), next to your Hallmark result.
 
 - Where do they agree? Where they disagree, which threw away information?
-  - *Your answer:*
+  - *Your answer:* They agree on the main story. TNF-α/NF-κB and Inflammatory response are the top two in both, and 18 of fgsea's 26 sets are also significant in the hypergeometric test. Heme metabolism is the single "down" set in both. fgsea alone finds 8 sets: Interferon gamma response, E2F targets, Protein secretion, G2M checkpoint, Interferon alpha response, PI3K AKT mTOR signaling, Apical junction and Adipogenesis (the last two are borderline). The hypergeometric test alone finds 2: Angiogenesis and Reactive oxygen species pathway. The hypergeometric test threw away information. It turns each gene into significant or not, so it ignores effect size and rank. It only found 1 down set against fgsea's 3, and it missed E2F targets and G2M checkpoint, two cell-cycle sets where many genes each shift a little. Reactome gives 398 significant sets out of 1,056 (237 up, 161 down), but that is not 398 separate findings. Of the 113 genes in the leading edges of the top 10 "down" sets, 74 appear in at least 8 of the 10, and they are ribosomal genes (RPL10, RPL11, RPL13...). So most of the top Reactome "down" sets are one ribosome/translation signal. The top "up" set, Neutrophil degranulation (NES 3.0), fits the inflammation story.
+
+```{r}
+# Hypergeometric ("is this set over-represented in my significant list?").
+# The universe is every gene we tested. It sees only a yes/no per gene.
+universe  <- names(rank_stat)
+up_genes   <- genes_by_outcome |> filter(!is.na(padj), padj < 0.05, log2FoldChange > 0) |> pull(feature)
+down_genes <- genes_by_outcome |> filter(!is.na(padj), padj < 0.05, log2FoldChange < 0) |> pull(feature)
+hyper_up   <- fora(hallmark_sets, up_genes,   universe, minSize = 15, maxSize = 500) |> as_tibble() |> arrange(padj)
+hyper_down <- fora(hallmark_sets, down_genes, universe, minSize = 15, maxSize = 500) |> as_tibble() |> arrange(padj)
+
+sig_fgsea <- fgsea_hallmark |> filter(padj < 0.05) |> pull(pathway)
+sig_hyper <- union(hyper_up$pathway[hyper_up$padj < 0.05], hyper_down$pathway[hyper_down$padj < 0.05])
+
+tibble(method = c("fgsea, all genes ranked", "hypergeometric, up genes", "hypergeometric, down genes"),
+       sets_significant = c(length(sig_fgsea), sum(hyper_up$padj < 0.05), sum(hyper_down$padj < 0.05)))
+cat("Significant in both:", length(intersect(sig_fgsea, sig_hyper)), "\n")
+cat("fgsea only:        ", nice_name(setdiff(sig_fgsea, sig_hyper)), sep = "\n  ")
+cat("\nhypergeometric only:", nice_name(setdiff(sig_hyper, sig_fgsea)), sep = "\n  ")
+```
+
+```{r}
+# fgsea on Reactome (a much bigger collection of more specific sets).
+reactome <- msigdbr(species = "Homo sapiens", collection = "C2", subcollection = "CP:REACTOME")
+reactome_sets <- split(reactome$ensembl_gene, reactome$gs_name)
+set.seed(1)
+fgsea_reactome <- fgsea(reactome_sets, rank_stat, minSize = 15, maxSize = 500) |>
+  as_tibble() |> arrange(padj)
+
+tibble(sets_tested = nrow(fgsea_reactome),
+       significant = sum(fgsea_reactome$padj < 0.05, na.rm = TRUE),
+       up_in_preterm = sum(fgsea_reactome$padj < 0.05 & fgsea_reactome$NES > 0, na.rm = TRUE),
+       down_in_preterm = sum(fgsea_reactome$padj < 0.05 & fgsea_reactome$NES < 0, na.rm = TRUE))
+fgsea_reactome |> select(pathway, size, NES, padj) |> slice_head(n = 8)
+
+# Are the top Reactome sets separate findings, or the same genes again?
+top_down <- fgsea_reactome |> filter(padj < 0.05, NES < 0) |> slice_head(n = 10)
+times_seen <- table(unlist(top_down$leadingEdge))
+cat("Genes in the leading edges of the top 10 'down' sets:", length(times_seen),
+    "\nOf those, genes appearing in at least 8 of the 10 sets:", sum(times_seen >= 8), "\n")
+shared_syms <- genes_by_outcome$symbol[match(names(times_seen)[times_seen >= 8], genes_by_outcome$feature)]
+head(sort(shared_syms), 12)
+```
 
 ### Step 6: look at the genes
 
@@ -120,12 +301,64 @@ Leading edge of the top set as gene symbols, then counts per million for two of
 them at week 18 by outcome.
 
 - Does the plot look like the effect the enrichment describes?
-  - *Your answer:*
+  - *Your answer:* Yes, roughly. The leading edge has 115 genes (top ones: PDE4B, NFIL3, PTX3, CEBPB, IL6). At week 18, median counts per million are 101 in preterm vs 37 in term for PDE4B, and 9.3 vs 3.3 for IL6 (43 preterm and 114 term samples). The boxes are higher in preterm, matching a log2 fold change of about +1 (roughly 2-fold). But the groups overlap a lot, so this is a shift in the middle, not a clean separation.
+
+```{r}
+# Leading edge of the top set = the genes that carried it. Symbols, strongest first.
+leading_tbl <- genes_by_outcome |>
+  filter(feature %in% fgsea_hallmark$leadingEdge[[1]]) |>
+  arrange(desc(stat)) |>
+  select(symbol, log2FoldChange, stat, padj)
+nrow(leading_tbl)
+head(leading_tbl, 12)
+```
+
+```{r}
+#| fig-height: 4
+# Counts per million (CPM) for two leading-edge genes, week 18 only.
+# CPM is for LOOKING at the data; the tests above used raw counts.
+meta18 <- d$metadata |> filter(time_point == "week_18")
+counts18 <- d$genes[, meta18$sample_id]
+stopifnot(identical(colnames(counts18), meta18$sample_id))     # order check
+cpm18 <- sweep(counts18, 2, colSums(counts18), "/") * 1e6
+
+pick <- c("PDE4B", "IL6")
+plot_df <- map_dfr(pick, function(g) {
+  id <- genes_by_outcome$feature[which(genes_by_outcome$symbol == g)]   # which() skips NA symbols
+  tibble(gene = g, outcome = meta18$outcome, cpm = cpm18[id, ])
+})
+ggplot(plot_df, aes(outcome, cpm + 1, fill = outcome)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6) +
+  geom_jitter(width = 0.15, alpha = 0.4) +
+  scale_y_log10() + facet_wrap(~ gene, scales = "free_y") +
+  labs(y = "CPM + 1 (log scale)", x = NULL) +
+  theme_minimal() + theme(legend.position = "none")
+plot_df |> group_by(gene, outcome) |>
+  summarise(n = n(), median_cpm = round(median(cpm), 1), .groups = "drop")
+```
 
 ### Step 7: polish one figure
 
 The `NES` bar chart for a talk: readable set names, colours labelled by
 direction, set size shown, projector-sized text.
+
+```{r}
+#| fig-width: 11
+#| fig-height: 6.5
+polished <- fgsea_hallmark |>
+  slice_head(n = 12) |>
+  mutate(name = nice_name(pathway),
+         direction = if_else(NES > 0, "Higher in preterm", "Higher in term"))
+ggplot(polished, aes(NES, fct_reorder(name, NES), fill = direction)) +
+  geom_col(width = 0.75) +
+  geom_text(aes(label = paste0(size, " genes"), hjust = if_else(NES > 0, -0.1, 1.1)), size = 5) +
+  scale_fill_manual(values = c("Higher in preterm" = "#c0392b", "Higher in term" = "#2c7fb8")) +
+  scale_x_continuous(expand = expansion(mult = 0.3)) +   # room for the "n genes" labels
+  labs(x = "Normalised enrichment score (NES)", y = NULL, fill = NULL,
+       title = "Hallmark gene sets, preterm vs term (week 18)") +
+  theme_minimal(base_size = 18) +
+  theme(legend.position = "top", plot.title.position = "plot")
+```
 
 ## Exercise 2: The same function, on 53 species
 
@@ -156,32 +389,91 @@ ranking vector from `stat`, named by `feature`. Build one set per genus from the
 `padj`.*
 
 - Number of sets (10), size of the largest (12)? Any species in two sets? A set called `NA`?
-  - *Your answer:*
+  - *Your answer:* 10 sets, and the largest has 12 species (Prevotella). No species is in two sets, and there is no set called NA (every species has a Genus). Only 36 of the 53 species are in a set. The rest belong to genera with one species and were dropped.
 - Which genus is on top, and does anything pass?
-  - *Your answer:*
+  - *Your answer:* Actinomyces is on top (2 species, NES −1.39, raw p = 0.0215), but after correcting for 10 tests its padj is 0.215. Nothing passes: every other genus has padj of 0.87 or higher.
+
+```{r}
+species_stat <- rank_from(species_by_outcome)
+
+# One set per group (Genus or Family), keeping groups with at least two species.
+make_sets <- function(col) {
+  species_by_outcome |>
+    filter(!is.na(.data[[col]])) |>
+    group_by(across(all_of(col))) |> filter(n() >= 2) |> ungroup() %>%
+    { split(.$feature, .[[col]]) }
+}
+genus_sets <- make_sets("Genus")
+length(genus_sets)                         # number of sets
+max(lengths(genus_sets))                   # largest set
+sum(table(unlist(genus_sets)) > 1)         # species in more than one set
+"NA" %in% names(genus_sets)                # a set called NA?
+sort(lengths(genus_sets), decreasing = TRUE)
+
+set.seed(1)
+fgsea_genus <- fgsea(genus_sets, species_stat, minSize = 2, maxSize = 50) |>
+  as_tibble() |> arrange(padj, pval)   # raw p breaks ties
+fgsea_genus |> select(pathway, size, NES, pval, padj)
+```
 
 ### Step 2: family instead of genus
 
 - Does the top family contain the top genus? Do the two levels agree?
-  - *Your answer:*
+  - *Your answer:* No. The top family is Peptoniphilaceae (NES +1.28, raw p = 0.197), and it does not contain Actinomyces, which is in Actinomycetaceae (NES −1.09, p = 0.385). All 9 family padj values tie at 0.933, so I sorted ties by raw p. The two levels only agree that nothing is significant. They do not point to the same group.
+
+```{r}
+family_sets <- make_sets("Family")
+set.seed(1)
+fgsea_family <- fgsea(family_sets, species_stat, minSize = 2, maxSize = 50) |>
+  as_tibble() |> arrange(padj, pval)   # raw p breaks ties: all family padj values tie
+fgsea_family |> select(pathway, size, NES, pval, padj)
+
+# Which family does the top genus belong to?
+species_by_outcome |> filter(Genus == fgsea_genus$pathway[1]) |> distinct(Genus, Family)
+```
 
 ### Step 3: the simple way
 
 The 53 species sorted by `stat` with their genus, as a table and as a plot.
 
 - Would you have reached the same conclusion without enrichment?
-  - *Your answer:*
+  - *Your answer:* Yes, and the plain table shows one more thing. No species has padj < 0.05 (the smallest is 0.99), and 28 of the 53 have no padj at all (DESeq2 gave them no p-value, usually because of outlier counts). At the top are Gardnerella swidsinskii/leopoldii (stat +2.0) and Prevotella melaninogenica (+1.95). At the bottom are Lactobacillus crispatus (−3.27) and Actinomyces hongkongensis (−2.2). The plot shows why the genus sets failed: Lactobacillus runs from +1.4 (L. hominis) to −3.3 (L. crispatus), and Prevotella from +1.9 to −1.6, so members of a genus pull in opposite directions and cancel out. Careful: both tables are compositional, so "lower in preterm" for L. crispatus means lower relative abundance, not necessarily less of it.
+
+```{r}
+species_by_outcome |>
+  arrange(desc(stat)) |>
+  select(feature, Genus, log2FoldChange, stat, padj) |>
+  mutate(across(where(is.numeric), ~ round(.x, 2)))
+sum(species_by_outcome$padj < 0.05, na.rm = TRUE)    # species passing padj < 0.05
+min(species_by_outcome$padj, na.rm = TRUE)           # smallest padj
+sum(is.na(species_by_outcome$padj))                  # species with no padj
+```
+
+```{r}
+#| fig-height: 9
+# Highlight the two biggest genera; everything else grey.
+species_by_outcome |>
+  mutate(group = if_else(Genus %in% c("Lactobacillus", "Prevotella"), Genus, "Other")) |>
+  ggplot(aes(stat, fct_reorder(feature, stat), colour = group)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_point(size = 2) +
+  scale_colour_manual(values = c(Lactobacillus = "#2c7fb8", Prevotella = "#c0392b", Other = "grey60")) +
+  labs(x = "stat (positive = higher in preterm)", y = NULL, colour = NULL) +
+  theme_minimal(base_size = 9)
+```
 
 ### Step 4: argue with it
 
 Was enrichment useful on the species table? Then the opposite case.
 
 - Which argument is stronger?
-  - *Your answer:*
+  - *Your answer:* The opposite case (genes) is stronger. On the species table, enrichment tested 10 tiny sets of 2 to 12 species, had very little power (best padj 0.215), and hid the one standout, L. crispatus. A genus is a taxonomic label, not a shared function. On genes, 1,698 significant genes is an unreadable list, and sets of about 190 genes let many small same-direction changes add up into one readable story (inflammation up, heme and cell cycle down).
 
 ### Step 5: when is set-based analysis worth doing?
 
 *For which of our two tables was it worth doing, and what feature of the table decides that:*
+
+It was worth doing for the gene table. What decides it is the size and meaning of the sets. Genes come in thousands, in curated sets of about 100 to 200 genes that share a function, and the unaided list is too long to read. The species table has only 53 features, its sets are taxonomic groups of 2 to 12 species that do not share a function, and the whole sorted table fits on one screen.
 
 ## Part 3 — Reach (optional)
 
